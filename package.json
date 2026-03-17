@@ -1,0 +1,25 @@
+{
+  "name": "property-drop-bot",
+  "version": "1.0.0",
+  "description": "Twitter bot that posts London new-build property price drops from Rightmove",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "cli": "tsx src/cli.ts",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "node-cron": "^3.0.3",
+    "playwright": "^1.49.0",
+    "twitter-api-v2": "^1.17.0",
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

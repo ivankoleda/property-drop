@@ -1,0 +1,11 @@
+name = "property-drop-bot"
+compatibility_date = "2024-12-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "property-drop-bot"
+database_id = "" # fill after `wrangler d1 create property-drop-bot`
+
+[[r2_buckets]]
+binding = "SCREENSHOTS"
+bucket_name = "property-drop-bot"
