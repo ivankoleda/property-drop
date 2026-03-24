@@ -5,7 +5,7 @@ import type { Area, ScrapedProperty } from './types.js';
 
 function parsePrice(text: string): number {
   // "£450,000" -> 45000000 (pence)
-  const cleaned = text.replace(/[£,\s]/g, '');
+  const cleaned = text.replace(/[£,\s.]/g, '');
   const pounds = parseInt(cleaned, 10);
   if (isNaN(pounds)) return 0;
   return pounds * 100;
@@ -25,16 +25,17 @@ function parseDate(text: string): string {
   return `${year}-${month}-${day}`;
 }
 
-function buildListUrl(rightmoveId: string, page: number): string {
-  const index = (page - 1) * 25;
-  return `https://www.rightmove.co.uk/house-prices/detail.html?country=england&locationIdentifier=POSTCODE%5E${rightmoveId}&searchLocation=&referrer=listChangeCriteria&index=${index}`;
+function buildListUrl(slug: string, pageNumber: number): string {
+  return `https://www.rightmove.co.uk/house-prices/${slug}.html?pageNumber=${pageNumber}&sortBy=DEED_DATE&sortOrder=DESC`;
 }
 
 async function scrapeListPage(page: Page, url: string): Promise<ScrapedProperty[]> {
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-  // Wait for the results to load
-  await page.waitForSelector('.sold-prices-results', { timeout: 15000 }).catch(() => null);
+  // Wait for property cards to load
+  await page.waitForSelector('a[href*="/house-prices/details/"]', { timeout: 15000 }).catch(() => null);
+  // Extra wait for dynamic rendering
+  await page.waitForTimeout(2000);
 
   const properties = await page.evaluate(() => {
     const results: {
@@ -47,43 +48,69 @@ async function scrapeListPage(page: Page, url: string): Promise<ScrapedProperty[
       transactions: { price: string; dateSold: string; displayPrice: string }[];
     }[] = [];
 
-    const cards = document.querySelectorAll('.sold-prices-result');
+    // Each property card is an <a> linking to /house-prices/details/{uuid}
+    // Exclude "track=true" links (the "See what it's worth now" links)
+    const cardLinks = document.querySelectorAll('a[href*="/house-prices/details/"]:not([href*="track=true"])');
 
-    for (const card of cards) {
-      const linkEl = card.querySelector('a[href*="/house-prices/"]') as HTMLAnchorElement | null;
-      if (!linkEl) continue;
-
-      const href = linkEl.getAttribute('href') || '';
-      const uuidMatch = href.match(/\/house-prices\/([^/]+)/);
+    for (const link of cardLinks) {
+      const href = link.getAttribute('href') || '';
+      const uuidMatch = href.match(/\/details\/([a-f0-9-]+)/);
       const uuid = uuidMatch ? uuidMatch[1] : '';
       if (!uuid) continue;
 
-      const addressEl = card.querySelector('.sold-prices-result-address, .ksc_cardHeader');
-      const address = addressEl?.textContent?.trim() || '';
+      // Address is in the H2 element
+      const address = link.querySelector('h2')?.textContent?.trim() || '';
+      if (!address) continue;
 
-      const typeEl = card.querySelector('.sold-prices-result-type, .ksc_cardBody .type');
-      const propertyType = typeEl?.textContent?.trim() || null;
+      // Property category chips: div[class*="_propertyCategory_"]
+      // These contain values like "Flat", "1" (bedrooms), "Leasehold", "Freehold", "Detached", etc.
+      const chips = link.querySelectorAll('div[class*="_propertyCategory_"]');
+      let propertyType: string | null = null;
+      let tenure: string | null = null;
+      let bedrooms: number | null = null;
 
-      const tenureEl = card.querySelector('.sold-prices-result-tenure, .ksc_cardBody .tenure');
-      const tenure = tenureEl?.textContent?.trim() || null;
+      const propertyTypes = ['Flat', 'Detached', 'Semi-Detached', 'Semi Detached', 'Terraced', 'Other'];
+      const tenureTypes = ['Leasehold', 'Freehold'];
 
-      const bedroomsEl = card.querySelector('.sold-prices-result-bedrooms, .ksc_cardBody .bedrooms');
-      const bedroomsText = bedroomsEl?.textContent?.trim() || '';
-      const bedroomsMatch = bedroomsText.match(/(\d+)/);
-      const bedrooms = bedroomsMatch ? parseInt(bedroomsMatch[1], 10) : null;
-
-      const txRows = card.querySelectorAll('.sold-prices-result-prices tr, .ksc_soldPriceHistory tr');
-      const transactions: { price: string; dateSold: string; displayPrice: string }[] = [];
-
-      for (const row of txRows) {
-        const cells = row.querySelectorAll('td');
-        if (cells.length < 2) continue;
-        const dateSold = cells[0]?.textContent?.trim() || '';
-        const price = cells[1]?.textContent?.trim() || '';
-        if (dateSold && price) {
-          transactions.push({ price, dateSold, displayPrice: price });
+      for (const chip of chips) {
+        const text = chip.textContent?.trim() || '';
+        if (propertyTypes.includes(text)) {
+          propertyType = text;
+        } else if (tenureTypes.includes(text)) {
+          tenure = text;
+        } else if (/^\d+$/.test(text)) {
+          bedrooms = parseInt(text, 10);
         }
       }
+
+      // Transactions from the table within THIS card link
+      const table = link.querySelector('table');
+      const transactions: { price: string; dateSold: string; displayPrice: string }[] = [];
+
+      if (table) {
+        const rows = table.querySelectorAll('tr');
+        for (const row of rows) {
+          const cells = row.querySelectorAll('td');
+          if (cells.length < 2) continue;
+
+          const dateText = cells[0]?.textContent?.trim() || '';
+          // Skip the "Today" row which has the "See what it's worth now" link
+          if (dateText === 'Today') continue;
+
+          // Price is in a div with aria-label, or just the cell text
+          const priceDiv = cells[1]?.querySelector('div[aria-label]');
+          const priceText = priceDiv
+            ? priceDiv.getAttribute('aria-label')?.replace('.', '') || ''
+            : cells[1]?.textContent?.trim() || '';
+
+          if (dateText && priceText.startsWith('£')) {
+            transactions.push({ price: priceText, dateSold: dateText, displayPrice: priceText });
+          }
+        }
+      }
+
+      // Detail URL - use the href directly (it's already absolute from Rightmove)
+      const detailUrl = href.startsWith('http') ? href : `https://www.rightmove.co.uk${href}`;
 
       results.push({
         uuid,
@@ -91,7 +118,7 @@ async function scrapeListPage(page: Page, url: string): Promise<ScrapedProperty[
         propertyType,
         tenure,
         bedrooms,
-        detailUrl: `https://www.rightmove.co.uk${href}`,
+        detailUrl,
         transactions,
       });
     }
@@ -112,8 +139,17 @@ async function scrapeListPage(page: Page, url: string): Promise<ScrapedProperty[
 
 function hasMorePages(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const next = document.querySelector('.pagination-next:not(.disabled), [data-test="pagination-next"]:not([disabled])');
-    return !!next;
+    // The pagination uses dsrm_pagination class with a "Next" button
+    const nextBtn = document.querySelector('.dsrm_pagination button');
+    if (!nextBtn) return false;
+    // Find the button that says "Next" and is not disabled
+    const buttons = document.querySelectorAll('.dsrm_pagination button');
+    for (const btn of buttons) {
+      if (btn.textContent?.includes('Next') && !btn.hasAttribute('disabled')) {
+        return true;
+      }
+    }
+    return false;
   });
 }
 
@@ -130,7 +166,7 @@ export async function scrapeArea(area: Area): Promise<number> {
 
   try {
     for (let pageNum = 1; pageNum <= area.max_pages; pageNum++) {
-      const url = buildListUrl(area.rightmove_id, pageNum);
+      const url = buildListUrl(area.slug, pageNum);
       console.log(`  Page ${pageNum}: ${url}`);
 
       const properties = await scrapeListPage(page, url);

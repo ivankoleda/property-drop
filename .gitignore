@@ -1,5 +1,13 @@
 node_modules/
 dist/
 .env
-*.png
 .wrangler/
+
+# Screenshots (local only, not in repo)
+screenshots/
+
+# Twitter browser session (contains auth cookies/tokens)
+twitter-auth/
+
+# Test artifacts
+test-results.json

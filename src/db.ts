@@ -58,18 +58,20 @@ export async function upsertProperty(
   propertyType: string | null,
   tenure: string | null,
   bedrooms: number | null,
-  detailUrl: string
+  detailUrl: string,
+  hasImages: boolean = false
 ): Promise<number> {
   // Try insert, on conflict update
   await query(
-    `INSERT INTO properties (uuid, area_id, address, property_type, tenure, bedrooms, detail_url)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO properties (uuid, area_id, address, property_type, tenure, bedrooms, detail_url, has_images)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(uuid) DO UPDATE SET
        address = excluded.address,
        property_type = COALESCE(excluded.property_type, properties.property_type),
        tenure = COALESCE(excluded.tenure, properties.tenure),
-       bedrooms = COALESCE(excluded.bedrooms, properties.bedrooms)`,
-    [uuid, areaId, address, propertyType, tenure, bedrooms, detailUrl]
+       bedrooms = COALESCE(excluded.bedrooms, properties.bedrooms),
+       has_images = MAX(properties.has_images, excluded.has_images)`,
+    [uuid, areaId, address, propertyType, tenure, bedrooms, detailUrl, hasImages ? 1 : 0]
   );
 
   const result = await query('SELECT id FROM properties WHERE uuid = ?', [uuid]);
@@ -133,11 +135,13 @@ export async function upsertQueueItem(
   prevPrice: number,
   currPrice: number,
   prevDate: string | null,
-  currDate: string | null
+  currDate: string | null,
+  adjDropAmount: number = 0,
+  adjDropPct: number = 0
 ): Promise<void> {
   await query(
-    `INSERT INTO post_queue (property_id, score, drop_amount, drop_pct, prev_price, curr_price, prev_date, curr_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO post_queue (property_id, score, drop_amount, drop_pct, prev_price, curr_price, prev_date, curr_date, adj_drop_amount, adj_drop_pct)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(property_id) DO UPDATE SET
        score = excluded.score,
        drop_amount = excluded.drop_amount,
@@ -146,14 +150,16 @@ export async function upsertQueueItem(
        curr_price = excluded.curr_price,
        prev_date = excluded.prev_date,
        curr_date = excluded.curr_date,
+       adj_drop_amount = excluded.adj_drop_amount,
+       adj_drop_pct = excluded.adj_drop_pct,
        status = CASE WHEN post_queue.status = 'posted' THEN 'posted' ELSE 'pending' END`,
-    [propertyId, score, dropAmount, dropPct, prevPrice, currPrice, prevDate, currDate]
+    [propertyId, score, dropAmount, dropPct, prevPrice, currPrice, prevDate, currDate, adjDropAmount, adjDropPct]
   );
 }
 
 export async function getPendingPosts(limit: number): Promise<QueueItemWithProperty[]> {
   const result = await query(
-    `SELECT q.*, p.address, p.property_type, p.tenure, p.detail_url, p.screenshot_key
+    `SELECT q.*, p.address, p.property_type, p.tenure, p.detail_url, p.screenshot_key, p.postcode
      FROM post_queue q
      JOIN properties p ON p.id = q.property_id
      WHERE q.status = 'pending'

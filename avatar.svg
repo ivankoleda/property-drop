@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="200" cy="200" r="200" fill="url(#bg)"/>
+
+  <!-- House + arrow composed together, centered -->
+  <g transform="translate(175,200)">
+    <!-- Roof -->
+    <polygon points="-120,0 0,-95 120,0" fill="#2c3e50"/>
+
+    <!-- House body -->
+    <rect x="-100" y="0" width="200" height="130" fill="#ecf0f1" rx="5"/>
+
+    <!-- Door -->
+    <rect x="-18" y="55" width="36" height="75" fill="#2c3e50" rx="4"/>
+    <circle cx="12" cy="95" r="3.5" fill="#f39c12"/>
+
+    <!-- Left window -->
+    <rect x="-78" y="22" width="40" height="38" fill="#3498db" rx="3" opacity="0.8"/>
+    <line x1="-58" y1="22" x2="-58" y2="60" stroke="#ecf0f1" stroke-width="2.5"/>
+    <line x1="-78" y1="41" x2="-38" y2="41" stroke="#ecf0f1" stroke-width="2.5"/>
+
+    <!-- Right window -->
+    <rect x="38" y="22" width="40" height="38" fill="#3498db" rx="3" opacity="0.8"/>
+    <line x1="58" y1="22" x2="58" y2="60" stroke="#ecf0f1" stroke-width="2.5"/>
+    <line x1="38" y1="41" x2="78" y2="41" stroke="#ecf0f1" stroke-width="2.5"/>
+  </g>
+
+  <!-- Down arrow, overlapping top-right of house -->
+  <g transform="translate(320,115)">
+    <polygon points="0,80 -48,26 -20,26 -20,-40 20,-40 20,26 48,26" fill="#e74c3c"/>
+  </g>
+</svg>

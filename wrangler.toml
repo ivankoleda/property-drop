@@ -4,7 +4,7 @@ compatibility_date = "2024-12-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "property-drop-bot"
-database_id = "" # fill after `wrangler d1 create property-drop-bot`
+database_id = "3544ef05-37ec-440a-aace-0d4f97387aa2"
 
 [[r2_buckets]]
 binding = "SCREENSHOTS"

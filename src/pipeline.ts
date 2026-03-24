@@ -20,45 +20,89 @@ export async function runScreenshots(): Promise<void> {
 }
 
 export async function runScore(): Promise<void> {
-  console.log('=== Starting scoring ===');
-
-  const properties = await getPropertiesWithMultipleTransactions();
-  console.log(`Found ${properties.length} properties to score`);
-
-  let scored = 0;
-  for (const prop of properties) {
-    const result = await scoreProperty(prop);
-    if (result) {
-      scored++;
-      console.log(`  Scored: ${prop.address} - drop ${result.dropPct}% (-£${(result.dropAmount / 100).toLocaleString()})`);
-    }
-  }
-
-  console.log(`=== Scoring complete: ${scored} properties queued ===`);
-}
-
-async function getPropertiesWithMultipleTransactions(): Promise<Property[]> {
-  // Import query function - we need a raw query here
+  console.log('=== Starting scoring (batched) ===');
   const { config: cfg } = await import('./config.js');
+  const { calculateDrop } = await import('./scorer.js');
 
   const D1_BASE = `https://api.cloudflare.com/client/v4/accounts/${cfg.cf.accountId}/d1/database/${cfg.cf.d1DatabaseId}`;
+  const headers = { 'Authorization': `Bearer ${cfg.cf.apiToken}`, 'Content-Type': 'application/json' };
 
-  const res = await fetch(`${D1_BASE}/query`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${cfg.cf.apiToken}`,
-      'Content-Type': 'application/json',
-    },
+  // Step 1: Fetch all properties with 2+ transactions in ONE query
+  console.log('  Fetching properties...');
+  const propRes = await fetch(`${D1_BASE}/query`, {
+    method: 'POST', headers,
     body: JSON.stringify({
-      sql: `SELECT p.* FROM properties p
+      sql: `SELECT p.id, p.address, p.has_images FROM properties p
             WHERE (SELECT COUNT(*) FROM transactions t WHERE t.property_id = p.id) >= 2`,
-      params: [],
     }),
   });
+  const propData = await propRes.json() as any;
+  if (!propData.success) throw new Error('Failed to query properties');
+  const properties = propData.result[0].results as { id: number; address: string; has_images: number }[];
+  console.log(`  Found ${properties.length} properties with 2+ transactions`);
 
-  const data = await res.json() as { result: { results: Property[] }[]; success: boolean };
-  if (!data.success) throw new Error('Failed to query properties');
-  return data.result[0].results;
+  // Step 2: Fetch ALL transactions in ONE query
+  console.log('  Fetching all transactions...');
+  const txRes = await fetch(`${D1_BASE}/query`, {
+    method: 'POST', headers,
+    body: JSON.stringify({
+      sql: `SELECT t.property_id, t.price, t.date_sold, t.display_price, t.source
+            FROM transactions t
+            JOIN properties p ON p.id = t.property_id
+            WHERE (SELECT COUNT(*) FROM transactions t2 WHERE t2.property_id = p.id) >= 2
+            ORDER BY t.property_id, t.date_sold DESC`,
+    }),
+  });
+  const txData = await txRes.json() as any;
+  if (!txData.success) throw new Error('Failed to query transactions');
+  const allTx = txData.result[0].results as { property_id: number; price: number; date_sold: string; display_price: string; source: string }[];
+  console.log(`  Fetched ${allTx.length} transactions`);
+
+  // Step 3: Group transactions by property_id
+  const txByProp = new Map<number, typeof allTx>();
+  for (const tx of allTx) {
+    if (!txByProp.has(tx.property_id)) txByProp.set(tx.property_id, []);
+    txByProp.get(tx.property_id)!.push(tx);
+  }
+
+  // Step 4: Score all in memory
+  console.log('  Scoring...');
+  const toUpsert: { propertyId: number; address: string; drop: NonNullable<ReturnType<typeof calculateDrop>> }[] = [];
+
+  for (const prop of properties) {
+    const txs = txByProp.get(prop.id);
+    if (!txs || txs.length < 2) continue;
+    const drop = calculateDrop(txs as any);
+    if (drop) {
+      toUpsert.push({ propertyId: prop.id, address: prop.address, drop });
+    }
+  }
+  console.log(`  ${toUpsert.length} properties qualify`);
+
+  // Step 5: Upsert into post_queue in parallel chunks
+  console.log('  Upserting to post_queue...');
+  const CONCURRENCY = 20;
+  for (let i = 0; i < toUpsert.length; i += CONCURRENCY) {
+    const chunk = toUpsert.slice(i, i + CONCURRENCY);
+    await Promise.all(chunk.map(({ propertyId, drop }) =>
+      fetch(`${D1_BASE}/query`, {
+        method: 'POST', headers,
+        body: JSON.stringify({
+          sql: `INSERT INTO post_queue (property_id, score, drop_amount, drop_pct, prev_price, curr_price, prev_date, curr_date, adj_drop_amount, adj_drop_pct)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(property_id) DO UPDATE SET
+                  score = excluded.score, drop_amount = excluded.drop_amount, drop_pct = excluded.drop_pct,
+                  prev_price = excluded.prev_price, curr_price = excluded.curr_price,
+                  prev_date = excluded.prev_date, curr_date = excluded.curr_date,
+                  adj_drop_amount = excluded.adj_drop_amount, adj_drop_pct = excluded.adj_drop_pct,
+                  status = CASE WHEN post_queue.status = 'posted' THEN 'posted' ELSE 'pending' END`,
+          params: [propertyId, drop.score, drop.dropAmount, drop.dropPct, drop.prevPrice, drop.currPrice, drop.prevDate, drop.currDate, drop.adjDropAmount, drop.adjDropPct],
+        }),
+      })
+    ));
+  }
+
+  console.log(`=== Scoring complete: ${toUpsert.length} properties queued ===`);
 }
 
 export async function runFullPipeline(): Promise<void> {
@@ -95,7 +139,7 @@ export async function runPost(limit: number = 5): Promise<number> {
       }
 
       const screenshot = await getScreenshot(item.screenshot_key);
-      const tweetId = await poster.post(item, screenshot);
+      const tweetId = await poster.post(item, [screenshot]);
       await markPosted(item.id, tweetId);
 
       console.log(`  Posted: ${item.address} (tweet: ${tweetId})`);
