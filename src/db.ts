@@ -157,15 +157,33 @@ export async function upsertQueueItem(
   );
 }
 
-export async function getPendingPosts(limit: number): Promise<QueueItemWithProperty[]> {
+export async function getPendingPosts(limit: number, filters?: Record<string, string>): Promise<QueueItemWithProperty[]> {
+  const allowedFilters: Record<string, string> = {
+    tenure: 'p.tenure',
+    type: 'p.property_type',
+  };
+
+  let whereClauses = `q.status = 'pending'`;
+  const params: unknown[] = [];
+
+  if (filters) {
+    for (const [key, value] of Object.entries(filters)) {
+      const col = allowedFilters[key];
+      if (!col) continue;
+      whereClauses += ` AND ${col} = ?`;
+      params.push(value);
+    }
+  }
+
+  params.push(limit);
   const result = await query(
     `SELECT q.*, p.address, p.property_type, p.tenure, p.detail_url, p.screenshot_key, p.postcode
      FROM post_queue q
      JOIN properties p ON p.id = q.property_id
-     WHERE q.status = 'pending'
+     WHERE ${whereClauses}
      ORDER BY q.score DESC
      LIMIT ?`,
-    [limit]
+    params
   );
   return result.results as unknown as QueueItemWithProperty[];
 }
@@ -175,6 +193,19 @@ export async function markPosted(queueId: number, tweetId: string): Promise<void
     "UPDATE post_queue SET status = 'posted', tweet_id = ?, posted_at = datetime('now') WHERE id = ?",
     [tweetId, queueId]
   );
+}
+
+export async function skipByUuid(uuid: string): Promise<{ address: string } | null> {
+  const result = await query(
+    `SELECT q.id, p.address FROM post_queue q
+     JOIN properties p ON p.id = q.property_id
+     WHERE p.uuid = ? AND q.status = 'pending'`,
+    [uuid]
+  );
+  if (result.results.length === 0) return null;
+  const row = result.results[0] as unknown as { id: number; address: string };
+  await markPosted(row.id, 'skipped');
+  return { address: row.address };
 }
 
 export async function getPostsToday(): Promise<number> {

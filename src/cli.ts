@@ -1,11 +1,28 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { runScrape, runScreenshots, runScore, runFullPipeline, runPost } from './pipeline.js';
-import { getStatus, runMigration, getPendingPosts, markPosted, markPropertyVisited } from './db.js';
+import { getStatus, runMigration, getPendingPosts, markPosted, markPropertyVisited, skipByUuid } from './db.js';
 import { twitterLogin, postTweet } from './twitter-browser.js';
 import { buildTweet } from './poster.js';
 import { chromium } from 'playwright';
 
 const command = process.argv[2];
+
+function parseFilters(): Record<string, string> | undefined {
+  const filters: Record<string, string> = {};
+  for (const arg of process.argv) {
+    if (arg.startsWith('--filter')) {
+      // Support both --filter tenure=freehold and --filter=tenure=freehold
+      const value = arg.includes('=') && arg !== '--filter'
+        ? arg.substring('--filter='.length)
+        : process.argv[process.argv.indexOf(arg) + 1];
+      if (value && value.includes('=')) {
+        const [k, v] = value.split('=', 2);
+        filters[k] = v;
+      }
+    }
+  }
+  return Object.keys(filters).length > 0 ? filters : undefined;
+}
 
 async function main() {
   switch (command) {
@@ -39,7 +56,8 @@ async function main() {
 
     case 'preview': {
       const previewLimit = parseInt(process.argv[3] || '5', 10);
-      const previewItems = await getPendingPosts(previewLimit);
+      const previewFilters = parseFilters();
+      const previewItems = await getPendingPosts(previewLimit, previewFilters);
       console.log(`\n${previewItems.length} pending tweets:\n`);
       previewItems.forEach((item, i) => {
         const { main } = buildTweet(item);
@@ -52,9 +70,10 @@ async function main() {
 
     case 'tweet': {
       const force = process.argv.includes('--force');
+      const tweetFilters = parseFilters();
       const limit = parseInt(process.argv.find(a => /^\d+$/.test(a) && a !== process.argv[2]) || '1', 10);
-      const items = await getPendingPosts(limit);
-      console.log(`Found ${items.length} pending posts${force ? ' (--force)' : ''}`);
+      const items = await getPendingPosts(limit, tweetFilters);
+      console.log(`Found ${items.length} pending posts${force ? ' (--force)' : ''}${tweetFilters ? ` (filter: ${JSON.stringify(tweetFilters)})` : ''}`);
 
       for (const item of items) {
         // Derive UUID from detail_url as fallback
@@ -187,8 +206,26 @@ async function main() {
     }
 
     case 'skip': {
+      // Skip by UUID: npm run cli skip --id bc1e23bf-...
+      const idIdx = process.argv.indexOf('--id');
+      if (idIdx !== -1) {
+        const uuid = process.argv[idIdx + 1];
+        if (!uuid) { console.log('Usage: npm run cli skip --id <uuid>'); break; }
+        // Support full URL or just UUID
+        const cleanUuid = uuid.match(/([a-f0-9-]{36})/)?.[1] || uuid;
+        const result = await skipByUuid(cleanUuid);
+        if (result) {
+          console.log(`Skipped: ${result.address}`);
+        } else {
+          console.log(`No pending item found for UUID: ${cleanUuid}`);
+        }
+        break;
+      }
+
+      // Skip top N: npm run cli skip [n] [--filter tenure=Freehold]
       const skipCount = parseInt(process.argv[3] || '1', 10);
-      const skipItems = await getPendingPosts(skipCount);
+      const skipFilters = parseFilters();
+      const skipItems = await getPendingPosts(skipCount, skipFilters);
       console.log(`Skipping ${skipItems.length} items from top of queue:`);
       for (const item of skipItems) {
         await markPosted(item.id, 'skipped');
