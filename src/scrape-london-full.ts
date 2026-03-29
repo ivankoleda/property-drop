@@ -19,15 +19,55 @@ async function ensureFreshToken() {
 const WORKERS = 4;
 const CUTOFF_DATE = '2025-01-01';
 
-// London boroughs/areas to search — breaks the 1000 result limit
-const LONDON_AREAS = [
-  'barking-and-dagenham', 'barnet', 'bexley', 'brent', 'bromley',
-  'camden', 'city-of-london', 'croydon', 'ealing', 'enfield',
-  'greenwich', 'hackney', 'hammersmith-and-fulham', 'haringey', 'harrow',
-  'havering', 'hillingdon', 'hounslow', 'islington', 'kensington-and-chelsea',
-  'kingston-upon-thames', 'lambeth', 'lewisham', 'merton', 'newham',
-  'redbridge', 'richmond-upon-thames', 'southwark', 'sutton',
-  'tower-hamlets', 'waltham-forest', 'wandsworth', 'westminster',
+interface AreaConfig { slug: string; county: string; }
+
+const AREAS: AreaConfig[] = [
+  // London boroughs
+  ...['barking-and-dagenham','barnet','bexley','brent','bromley',
+    'camden','city-of-london','croydon','ealing','enfield',
+    'greenwich','hackney','hammersmith-and-fulham','haringey','harrow',
+    'havering','hillingdon','hounslow','islington','kensington-and-chelsea',
+    'kingston-upon-thames','lambeth','lewisham','merton','newham',
+    'redbridge','richmond-upon-thames','southwark','sutton',
+    'tower-hamlets','waltham-forest','wandsworth','westminster',
+  ].map(s => ({ slug: s, county: 'London' })),
+
+  // Essex outcodes
+  ...['CM1','CM2','CM3','CM11','CM12','CM13','CM14','CM15',
+    'SS0','SS1','SS2','SS3','SS4','SS5','SS6','SS7','SS8','SS9','SS11','SS12','SS13','SS14','SS15','SS16','SS17',
+    'RM1','RM2','RM3','RM4','RM5','RM6','RM7','RM8','RM9','RM10','RM11','RM12','RM13','RM14','RM15','RM16','RM17','RM18','RM19','RM20',
+    'IG1','IG2','IG3','IG4','IG5','IG6','IG7','IG8','IG9','IG10','IG11',
+  ].map(s => ({ slug: s, county: 'Essex' })),
+
+  // Kent outcodes
+  ...['DA1','DA2','DA3','DA4','DA5','DA6','DA7','DA8','DA9','DA10','DA11','DA12','DA13','DA14','DA15','DA16','DA17','DA18',
+    'BR1','BR2','BR3','BR4','BR5','BR6','BR7','BR8',
+    'ME1','ME2','ME3','ME4','ME5','ME6','ME7','ME8','ME14','ME15','ME16','ME17','ME18','ME19','ME20',
+    'TN1','TN2','TN3','TN4','TN9','TN10','TN11','TN12','TN13','TN14','TN15',
+    'CT1','CT2','CT5','CT6',
+  ].map(s => ({ slug: s, county: 'Kent' })),
+
+  // Surrey outcodes
+  ...['CR0','CR2','CR3','CR4','CR5','CR6','CR7','CR8',
+    'GU1','GU2','GU3','GU4','GU5','GU7','GU8','GU9','GU10','GU12','GU15','GU16','GU18','GU21','GU22','GU23','GU24','GU25','GU27',
+    'KT1','KT2','KT3','KT4','KT5','KT6','KT7','KT8','KT9','KT10','KT11','KT12','KT13','KT14','KT15','KT16','KT17','KT18','KT19','KT20','KT21','KT22','KT23','KT24',
+    'RH1','RH2','RH3','RH4','RH5','RH6','RH7','RH8','RH9',
+    'SM1','SM2','SM3','SM4','SM5','SM6','SM7',
+    'TW1','TW2','TW3','TW4','TW5','TW7','TW8','TW9','TW10','TW11','TW12','TW13','TW14','TW15','TW16','TW17','TW18','TW19','TW20',
+  ].map(s => ({ slug: s, county: 'Surrey' })),
+
+  // Hertfordshire outcodes
+  ...['AL1','AL2','AL3','AL4','AL5','AL6','AL7','AL8','AL9','AL10',
+    'EN6','EN7','EN8','EN10','EN11',
+    'HP1','HP2','HP3','HP4',
+    'SG1','SG2','SG3','SG4','SG5','SG6','SG7','SG8','SG12','SG13','SG14',
+    'WD3','WD4','WD5','WD6','WD7','WD17','WD18','WD19','WD23','WD24','WD25',
+  ].map(s => ({ slug: s, county: 'Hertfordshire' })),
+
+  // Berkshire outcodes
+  ...['RG1','RG2','RG4','RG5','RG6','RG7','RG8','RG9','RG10','RG12','RG14','RG30','RG31','RG40','RG41','RG42','RG45',
+    'SL0','SL1','SL2','SL3','SL4','SL5','SL6','SL7','SL8','SL9',
+  ].map(s => ({ slug: s, county: 'Berkshire' })),
 ];
 
 function parsePrice(text: string): number {
@@ -146,15 +186,15 @@ function getD1Base() {
   return `https://api.cloudflare.com/client/v4/accounts/${config.cf.accountId}/d1/database/${config.cf.d1DatabaseId}`;
 }
 
-async function ensureArea(name: string, slug: string): Promise<number> {
+async function ensureArea(name: string, slug: string, county: string = 'London'): Promise<number> {
   const D1_BASE = getD1Base();
   const headers = getD1Headers();
 
   await fetch(`${D1_BASE}/query`, {
     method: 'POST', headers,
     body: JSON.stringify({
-      sql: `INSERT OR IGNORE INTO areas (name, slug, rightmove_id, max_pages) VALUES (?, ?, ?, 9999)`,
-      params: [name, slug, slug],
+      sql: `INSERT OR IGNORE INTO areas (name, slug, rightmove_id, max_pages, county) VALUES (?, ?, ?, 9999, ?)`,
+      params: [name, slug, slug, county],
     }),
   });
 
@@ -164,7 +204,6 @@ async function ensureArea(name: string, slug: string): Promise<number> {
   });
   const data = await res.json() as any;
   if (!data.success || !data.result?.[0]?.results?.[0]) {
-    // Token may have expired — force refresh and retry
     try { execSync('npx wrangler d1 execute property-drop-bot --remote --command="SELECT 1"', { stdio: 'ignore' }); } catch {}
     lastTokenRefresh = Date.now();
 
@@ -172,8 +211,8 @@ async function ensureArea(name: string, slug: string): Promise<number> {
     await fetch(`${D1_BASE}/query`, {
       method: 'POST', headers: freshHeaders,
       body: JSON.stringify({
-        sql: `INSERT OR IGNORE INTO areas (name, slug, rightmove_id, max_pages) VALUES (?, ?, ?, 9999)`,
-        params: [name, slug, slug],
+        sql: `INSERT OR IGNORE INTO areas (name, slug, rightmove_id, max_pages, county) VALUES (?, ?, ?, 9999, ?)`,
+        params: [name, slug, slug, county],
       }),
     });
     const retry = await fetch(`${D1_BASE}/query`, {
@@ -243,14 +282,14 @@ async function scrapeArea(workerId: number, area: string, areaId: number): Promi
   return totalSaved;
 }
 
-async function worker(workerId: number, areas: string[]): Promise<number> {
+async function worker(workerId: number, areas: AreaConfig[]): Promise<number> {
   let total = 0;
-  for (const area of areas) {
+  for (const { slug, county } of areas) {
     await ensureFreshToken();
-    const name = area.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-    const areaId = await ensureArea(name, area);
-    const saved = await scrapeArea(workerId, area, areaId);
-    console.log(`  [W${workerId}] ${area} done: ${saved} properties`);
+    const name = slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const areaId = await ensureArea(name, slug, county);
+    const saved = await scrapeArea(workerId, slug, areaId);
+    console.log(`  [W${workerId}] ${slug} (${county}) done: ${saved} properties`);
     total += saved;
     await randomDelay(2000, 4000);
   }
@@ -258,19 +297,32 @@ async function worker(workerId: number, areas: string[]): Promise<number> {
 }
 
 async function main() {
-  console.log(`=== London full scrape by borough (${LONDON_AREAS.length} boroughs, ${WORKERS} workers) ===`);
+  // Filter by county if arg provided: npx tsx src/scrape-london-full.ts Essex
+  const countyFilter = process.argv[2];
+  const areas = countyFilter
+    ? AREAS.filter(a => a.county.toLowerCase() === countyFilter.toLowerCase())
+    : AREAS;
+
+  if (areas.length === 0) {
+    console.log(`No areas found for county: ${countyFilter}`);
+    console.log(`Available: ${[...new Set(AREAS.map(a => a.county))].join(', ')}`);
+    process.exit(1);
+  }
+
+  const counties = [...new Set(areas.map(a => a.county))];
+  console.log(`=== Scraping ${areas.length} areas (${counties.join(', ')}), ${WORKERS} workers ===`);
   console.log(`Cutoff: ${CUTOFF_DATE}\n`);
 
-  // Distribute boroughs across workers
-  const workerAreas: string[][] = Array.from({ length: WORKERS }, () => []);
-  LONDON_AREAS.forEach((a, i) => workerAreas[i % WORKERS].push(a));
+  // Distribute across workers
+  const workerAreas: AreaConfig[][] = Array.from({ length: WORKERS }, () => []);
+  areas.forEach((a, i) => workerAreas[i % WORKERS].push(a));
 
   const counts = await Promise.all(
-    workerAreas.map((areas, i) => worker(i + 1, areas))
+    workerAreas.map((batch, i) => worker(i + 1, batch))
   );
 
   const total = counts.reduce((a, b) => a + b, 0);
-  console.log(`\n=== Done: ${total} properties scraped across ${LONDON_AREAS.length} boroughs ===`);
+  console.log(`\n=== Done: ${total} properties scraped across ${areas.length} areas ===`);
 }
 
 main().catch(err => { console.error('Fatal:', err); process.exit(1); });

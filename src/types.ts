@@ -35,6 +35,7 @@ export interface Transaction {
 export interface QueueItem {
   id: number;
   property_id: number;
+  queue_type: string; // 'sold' | 'listed'
   score: number;
   drop_amount: number; // pence (nominal)
   drop_pct: number;    // nominal
@@ -57,6 +58,9 @@ export interface QueueItemWithProperty extends QueueItem {
   detail_url: string;
   screenshot_key: string | null;
   postcode: string | null;
+  county: string | null;
+  listing_price: number | null;
+  listing_url: string | null;
 }
 
 export interface ScrapedProperty {

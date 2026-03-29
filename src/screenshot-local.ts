@@ -103,7 +103,7 @@ async function screenshotProperty(page: Page, prop: PropertyToScreenshot): Promi
       const bottom = rects.ir ? rects.ir.bottom + 10 : rects.cw.bottom;
       await page.screenshot({
         path: `${SCREENSHOTS_DIR}/${prop.uuid}_photo.png`,
-        clip: { x: 0, y, width: 390, height: bottom - y },
+        clip: { x: 0, y, width: 430, height: bottom - y },
       });
     }
   }
@@ -114,7 +114,7 @@ async function screenshotProperty(page: Page, prop: PropertyToScreenshot): Promi
 async function worker(workerId: number, properties: PropertyToScreenshot[]): Promise<number> {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
-    viewport: { width: 390, height: 844 },
+    viewport: { width: 430, height: 932 },
     deviceScaleFactor: 3,
     userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
     isMobile: true,

@@ -137,12 +137,13 @@ export async function upsertQueueItem(
   prevDate: string | null,
   currDate: string | null,
   adjDropAmount: number = 0,
-  adjDropPct: number = 0
+  adjDropPct: number = 0,
+  queueType: string = 'sold'
 ): Promise<void> {
   await query(
-    `INSERT INTO post_queue (property_id, score, drop_amount, drop_pct, prev_price, curr_price, prev_date, curr_date, adj_drop_amount, adj_drop_pct)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(property_id) DO UPDATE SET
+    `INSERT INTO post_queue (property_id, queue_type, score, drop_amount, drop_pct, prev_price, curr_price, prev_date, curr_date, adj_drop_amount, adj_drop_pct)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(property_id, queue_type) DO UPDATE SET
        score = excluded.score,
        drop_amount = excluded.drop_amount,
        drop_pct = excluded.drop_pct,
@@ -153,7 +154,7 @@ export async function upsertQueueItem(
        adj_drop_amount = excluded.adj_drop_amount,
        adj_drop_pct = excluded.adj_drop_pct,
        status = CASE WHEN post_queue.status = 'posted' THEN 'posted' ELSE 'pending' END`,
-    [propertyId, score, dropAmount, dropPct, prevPrice, currPrice, prevDate, currDate, adjDropAmount, adjDropPct]
+    [propertyId, queueType, score, dropAmount, dropPct, prevPrice, currPrice, prevDate, currDate, adjDropAmount, adjDropPct]
   );
 }
 
@@ -161,6 +162,8 @@ export async function getPendingPosts(limit: number, filters?: Record<string, st
   const allowedFilters: Record<string, string> = {
     tenure: 'p.tenure',
     type: 'p.property_type',
+    queuetype: 'q.queue_type',
+    county: 'a.county',
   };
 
   let whereClauses = `q.status = 'pending'`;
@@ -177,9 +180,10 @@ export async function getPendingPosts(limit: number, filters?: Record<string, st
 
   params.push(limit);
   const result = await query(
-    `SELECT q.*, p.address, p.property_type, p.tenure, p.detail_url, p.screenshot_key, p.postcode
+    `SELECT q.*, p.address, p.property_type, p.tenure, p.detail_url, p.screenshot_key, p.postcode, p.listing_price, p.listing_url, a.county
      FROM post_queue q
      JOIN properties p ON p.id = q.property_id
+     JOIN areas a ON a.id = p.area_id
      WHERE ${whereClauses}
      ORDER BY q.score DESC
      LIMIT ?`,
@@ -193,6 +197,27 @@ export async function markPosted(queueId: number, tweetId: string): Promise<void
     "UPDATE post_queue SET status = 'posted', tweet_id = ?, posted_at = datetime('now') WHERE id = ?",
     [tweetId, queueId]
   );
+}
+
+export async function getPendingByUuid(uuid: string): Promise<QueueItemWithProperty | null> {
+  const result = await query(
+    `SELECT q.*, p.address, p.property_type, p.tenure, p.detail_url, p.screenshot_key, p.postcode, p.listing_price, p.listing_url
+     FROM post_queue q
+     JOIN properties p ON p.id = q.property_id
+     WHERE p.uuid = ? AND q.status = 'pending'`,
+    [uuid]
+  );
+  if (result.results.length === 0) return null;
+  return result.results[0] as unknown as QueueItemWithProperty;
+}
+
+export async function getPropertyByUuid(uuid: string): Promise<{ id: number; address: string; property_type: string | null; tenure: string | null; detail_url: string; screenshot_key: string | null; postcode: string | null; listing_price: number | null; listing_url: string | null } | null> {
+  const result = await query(
+    `SELECT id, address, property_type, tenure, detail_url, screenshot_key, postcode, listing_price, listing_url FROM properties WHERE uuid = ?`,
+    [uuid]
+  );
+  if (result.results.length === 0) return null;
+  return result.results[0] as any;
 }
 
 export async function skipByUuid(uuid: string): Promise<{ address: string } | null> {

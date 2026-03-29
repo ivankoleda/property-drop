@@ -33,14 +33,20 @@ export function buildTweet(item: QueueItemWithProperty): { main: string; reply: 
   const adjPrevPriceRaw = item.curr_price + adjDropAmount;
   const adjPrevPrice = Math.round(adjPrevPriceRaw / 100000) * 100000; // round to nearest £1k in pence
 
-  const currentYear = new Date().getFullYear();
-  const currDateShort = formatMonthYearShort(item.curr_date);
   const prevYear = formatYear(item.prev_date);
 
-  const line1 = `Sold for \u00A3${formatPoundsShort(item.curr_price)}${currDateShort ? ` in ${currDateShort}` : ''}`;
+  let line1: string;
+  if (item.queue_type === 'listed') {
+    line1 = `Currently listed for \u00A3${formatPoundsShort(item.curr_price)}`;
+  } else {
+    const currDateShort = formatMonthYearShort(item.curr_date);
+    line1 = `Sold for \u00A3${formatPoundsShort(item.curr_price)}${currDateShort ? ` in ${currDateShort}` : ''}`;
+  }
+
   const line2 = `Previously sold${prevYear ? ` in ${prevYear}` : ''} for \u00A3${formatPoundsShort(item.prev_price)} (\u00A3${formatPoundsShort(adjPrevPrice)} inflation adjusted)`;
 
-  const main = `${line1}\n${line2}\n\n${item.detail_url}`;
+  const url = item.listing_url || item.detail_url;
+  const main = `${line1}\n${line2}\n\n${url}`;
 
   return { main, reply: null };
 }

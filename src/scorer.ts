@@ -4,10 +4,17 @@ const SCORING_DEFAULTS = {
   minDropPence: 30_000_00, // £30k minimum nominal drop
   minDropPct: 5,           // 5% minimum nominal drop
   maxDropPct: 45, // >45% nominal drop is almost always conversion/data error
-  minPricePence: 350_000_00, // £350k min last sale price
+  minPricePence: 200_000_00, // £200k min last sale price
   minGapMonths: 3,
   minDiffPence: 1_000_00,
   recencyMonths: 9,
+};
+
+// Freehold: lower thresholds — smaller drops are still newsworthy for houses
+const FREEHOLD_DEFAULTS = {
+  ...SCORING_DEFAULTS,
+  minDropPence: 5_000_00, // £5k minimum
+  minDropPct: 1,          // 1% minimum
 };
 
 // ONS monthly CPI index values (D7BT series, 2015=100)
@@ -54,7 +61,7 @@ function getCPIIndex(date: string): number {
  * Adjust a price from one date to another using exact ONS monthly CPI index.
  * Returns what `pricePence` at `fromDate` is worth in `toDate` money.
  */
-function inflationAdjustedPrice(pricePence: number, fromDate: string, toDate: string): number {
+export function inflationAdjustedPrice(pricePence: number, fromDate: string, toDate: string): number {
   const fromCPI = getCPIIndex(fromDate);
   const toCPI = getCPIIndex(toDate);
   if (fromCPI === 0) return pricePence;
@@ -85,7 +92,7 @@ function monthsSinceNow(date: string): number {
   return (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
 }
 
-export function calculateDrop(transactions: Transaction[]): DropResult | null {
+export function calculateDrop(transactions: Transaction[], tenure?: string | null): DropResult | null {
   if (transactions.length < 2) return null;
 
   // --- Anomaly detection: filter out suspicious transaction histories ---
@@ -126,19 +133,20 @@ export function calculateDrop(transactions: Transaction[]): DropResult | null {
   const dropPct = (dropAmount / prev.price) * 100;
 
   // --- Noise filters ---
+  const thresholds = tenure === 'Freehold' ? FREEHOLD_DEFAULTS : SCORING_DEFAULTS;
 
   // Recency: most recent sale must be within N months
-  if (monthsSinceNow(curr.date_sold) > SCORING_DEFAULTS.recencyMonths) return null;
+  if (monthsSinceNow(curr.date_sold) > thresholds.recencyMonths) return null;
 
   // Minimum drop thresholds
-  if (dropAmount < SCORING_DEFAULTS.minDropPence) return null;
-  if (dropPct < SCORING_DEFAULTS.minDropPct) return null;
+  if (dropAmount < thresholds.minDropPence) return null;
+  if (dropPct < thresholds.minDropPct) return null;
 
   // Noise: suspiciously large drop (likely data error)
-  if (dropPct > SCORING_DEFAULTS.maxDropPct) return null;
+  if (dropPct > thresholds.maxDropPct) return null;
 
   // Noise: very cheap property
-  if (curr.price < SCORING_DEFAULTS.minPricePence) return null;
+  if (curr.price < thresholds.minPricePence) return null;
 
   // Noise: too short between sales (likely entity transfer / commercial churn)
   // Minimum 2 years between sales for genuine residential transaction
@@ -205,4 +213,54 @@ export async function scoreProperty(property: Property): Promise<DropResult | nu
   }
 
   return drop;
+}
+
+/**
+ * Score a currently-listed property against its last sold price.
+ * Simpler than calculateDrop — no recency filter (listing is current),
+ * relaxed gap check, but same min thresholds and inflation adjustment.
+ */
+export function calculateListingDrop(
+  listingPricePence: number,
+  lastSoldPricePence: number,
+  lastSoldDate: string,
+): DropResult | null {
+  if (listingPricePence >= lastSoldPricePence) return null;
+
+  const dropAmount = lastSoldPricePence - listingPricePence;
+  const dropPct = (dropAmount / lastSoldPricePence) * 100;
+
+  // Min thresholds
+  if (dropAmount < SCORING_DEFAULTS.minDropPence) return null;
+  if (dropPct < SCORING_DEFAULTS.minDropPct) return null;
+  if (dropPct > SCORING_DEFAULTS.maxDropPct) return null;
+  if (listingPricePence < SCORING_DEFAULTS.minPricePence) return null;
+
+  // Inflation adjustment: what was the sold price worth in today's money?
+  const today = new Date().toISOString().slice(0, 10);
+  const adjPrevPrice = inflationAdjustedPrice(lastSoldPricePence, lastSoldDate, today);
+  const adjDropAmount = adjPrevPrice - listingPricePence;
+  const adjDropPct = (adjDropAmount / adjPrevPrice) * 100;
+
+  // Scoring — same formula as sold properties
+  const pctWeight = (dropPct / 10) ** 2;
+  const currPounds = listingPricePence / 100;
+  const relatability = currPounds <= 800_000
+    ? 1.0
+    : Math.max(0.5, 1 - (currPounds - 800_000) / 4_000_000);
+  const inflationBonus = 1 + Math.min(Math.max(adjDropPct - dropPct, 0), 30) / 100;
+  // No recency decay — listings are current
+  const score = Math.sqrt(dropAmount / 100) * pctWeight * relatability * inflationBonus;
+
+  return {
+    score,
+    dropAmount,
+    dropPct: Math.round(dropPct * 10) / 10,
+    adjDropAmount,
+    adjDropPct: Math.round(adjDropPct * 10) / 10,
+    prevPrice: lastSoldPricePence,
+    currPrice: listingPricePence,
+    prevDate: lastSoldDate,
+    currDate: today,
+  };
 }

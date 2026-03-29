@@ -32,13 +32,13 @@ export async function runScore(): Promise<void> {
   const propRes = await fetch(`${D1_BASE}/query`, {
     method: 'POST', headers,
     body: JSON.stringify({
-      sql: `SELECT p.id, p.address, p.has_images FROM properties p
+      sql: `SELECT p.id, p.address, p.has_images, p.tenure FROM properties p
             WHERE (SELECT COUNT(*) FROM transactions t WHERE t.property_id = p.id) >= 2`,
     }),
   });
   const propData = await propRes.json() as any;
   if (!propData.success) throw new Error('Failed to query properties');
-  const properties = propData.result[0].results as { id: number; address: string; has_images: number }[];
+  const properties = propData.result[0].results as { id: number; address: string; has_images: number; tenure: string | null }[];
   console.log(`  Found ${properties.length} properties with 2+ transactions`);
 
   // Step 2: Fetch ALL transactions in ONE query
@@ -72,7 +72,7 @@ export async function runScore(): Promise<void> {
   for (const prop of properties) {
     const txs = txByProp.get(prop.id);
     if (!txs || txs.length < 2) continue;
-    const drop = calculateDrop(txs as any);
+    const drop = calculateDrop(txs as any, prop.tenure);
     if (drop) {
       toUpsert.push({ propertyId: prop.id, address: prop.address, drop });
     }
@@ -88,9 +88,9 @@ export async function runScore(): Promise<void> {
       fetch(`${D1_BASE}/query`, {
         method: 'POST', headers,
         body: JSON.stringify({
-          sql: `INSERT INTO post_queue (property_id, score, drop_amount, drop_pct, prev_price, curr_price, prev_date, curr_date, adj_drop_amount, adj_drop_pct)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(property_id) DO UPDATE SET
+          sql: `INSERT INTO post_queue (property_id, queue_type, score, drop_amount, drop_pct, prev_price, curr_price, prev_date, curr_date, adj_drop_amount, adj_drop_pct)
+                VALUES (?, 'sold', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(property_id, queue_type) DO UPDATE SET
                   score = excluded.score, drop_amount = excluded.drop_amount, drop_pct = excluded.drop_pct,
                   prev_price = excluded.prev_price, curr_price = excluded.curr_price,
                   prev_date = excluded.prev_date, curr_date = excluded.curr_date,
